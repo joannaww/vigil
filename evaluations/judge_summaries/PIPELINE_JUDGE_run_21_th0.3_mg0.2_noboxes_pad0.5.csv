@@ -1,0 +1,2 @@
+﻿Run;Threshold;Margin;Boxes;Padding;Cars_4excl;Cars_Only;Clothes_4excl;Clothes_Only;Cosmetics_4excl;Cosmetics_Only;Electronics_4excl;Electronics_Only;Furniture_4excl;Furniture_Only
+run_21_th0.3_mg0.2_noboxes_pad0.5;0.3;0.2;False;0.5;0.1278;0.1195;0.106;0.2065;0.1326;0.1001;0.1425;0.0604;0.1216;0.144

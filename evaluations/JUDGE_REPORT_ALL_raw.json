@@ -1,0 +1,413 @@
+{
+  "qwen8b": {
+    "cars": {
+      "objects": {
+        "tp": 5,
+        "fp": 110,
+        "fn": 151
+      },
+      "background": {
+        "tp": 0,
+        "fp": 3,
+        "fn": 18
+      },
+      "position_logic": {
+        "tp": 20,
+        "fp": 81,
+        "fn": 106
+      },
+      "physical": {
+        "tp": 5,
+        "fp": 151,
+        "fn": 48
+      },
+      "object_omission": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 4
+      }
+    },
+    "clothes": {
+      "objects": {
+        "tp": 98,
+        "fp": 865,
+        "fn": 287
+      },
+      "background": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 70
+      },
+      "position_logic": {
+        "tp": 2,
+        "fp": 5,
+        "fn": 207
+      },
+      "physical": {
+        "tp": 0,
+        "fp": 23,
+        "fn": 18
+      },
+      "object_omission": {
+        "tp": 20,
+        "fp": 162,
+        "fn": 35
+      }
+    },
+    "cosmetics": {
+      "objects": {
+        "tp": 2,
+        "fp": 58,
+        "fn": 82
+      },
+      "background": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 42
+      },
+      "position_logic": {
+        "tp": 20,
+        "fp": 187,
+        "fn": 53
+      },
+      "physical": {
+        "tp": 18,
+        "fp": 73,
+        "fn": 220
+      },
+      "object_omission": {
+        "tp": 0,
+        "fp": 2,
+        "fn": 0
+      }
+    },
+    "electronics": {
+      "objects": {
+        "tp": 20,
+        "fp": 320,
+        "fn": 159
+      },
+      "background": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 6
+      },
+      "position_logic": {
+        "tp": 8,
+        "fp": 93,
+        "fn": 43
+      },
+      "physical": {
+        "tp": 22,
+        "fp": 155,
+        "fn": 163
+      },
+      "object_omission": {
+        "tp": 0,
+        "fp": 47,
+        "fn": 3
+      }
+    },
+    "furniture": {
+      "objects": {
+        "tp": 35,
+        "fp": 113,
+        "fn": 148
+      },
+      "background": {
+        "tp": 0,
+        "fp": 4,
+        "fn": 14
+      },
+      "position_logic": {
+        "tp": 18,
+        "fp": 69,
+        "fn": 58
+      },
+      "physical": {
+        "tp": 14,
+        "fp": 56,
+        "fn": 61
+      },
+      "object_omission": {
+        "tp": 3,
+        "fp": 51,
+        "fn": 6
+      }
+    }
+  },
+  "gemini": {
+    "cars": {
+      "objects": {
+        "tp": 5,
+        "fp": 34,
+        "fn": 156
+      },
+      "background": {
+        "tp": 0,
+        "fp": 1,
+        "fn": 16
+      },
+      "position_logic": {
+        "tp": 28,
+        "fp": 46,
+        "fn": 99
+      },
+      "physical": {
+        "tp": 13,
+        "fp": 144,
+        "fn": 39
+      },
+      "object_omission": {
+        "tp": 5,
+        "fp": 1,
+        "fn": 0
+      }
+    },
+    "clothes": {
+      "objects": {
+        "tp": 66,
+        "fp": 287,
+        "fn": 333
+      },
+      "background": {
+        "tp": 1,
+        "fp": 2,
+        "fn": 72
+      },
+      "position_logic": {
+        "tp": 187,
+        "fp": 73,
+        "fn": 12
+      },
+      "physical": {
+        "tp": 1,
+        "fp": 274,
+        "fn": 16
+      },
+      "object_omission": {
+        "tp": 39,
+        "fp": 43,
+        "fn": 16
+      }
+    },
+    "cosmetics": {
+      "objects": {
+        "tp": 3,
+        "fp": 14,
+        "fn": 80
+      },
+      "background": {
+        "tp": 3,
+        "fp": 10,
+        "fn": 36
+      },
+      "position_logic": {
+        "tp": 11,
+        "fp": 42,
+        "fn": 61
+      },
+      "physical": {
+        "tp": 16,
+        "fp": 59,
+        "fn": 216
+      },
+      "object_omission": {
+        "tp": 0,
+        "fp": 2,
+        "fn": 0
+      }
+    },
+    "electronics": {
+      "objects": {
+        "tp": 11,
+        "fp": 84,
+        "fn": 166
+      },
+      "background": {
+        "tp": 0,
+        "fp": 6,
+        "fn": 6
+      },
+      "position_logic": {
+        "tp": 13,
+        "fp": 57,
+        "fn": 39
+      },
+      "physical": {
+        "tp": 33,
+        "fp": 104,
+        "fn": 160
+      },
+      "object_omission": {
+        "tp": 1,
+        "fp": 3,
+        "fn": 2
+      }
+    },
+    "furniture": {
+      "objects": {
+        "tp": 26,
+        "fp": 26,
+        "fn": 159
+      },
+      "background": {
+        "tp": 0,
+        "fp": 10,
+        "fn": 14
+      },
+      "position_logic": {
+        "tp": 6,
+        "fp": 21,
+        "fn": 67
+      },
+      "physical": {
+        "tp": 23,
+        "fp": 40,
+        "fn": 53
+      },
+      "object_omission": {
+        "tp": 5,
+        "fp": 11,
+        "fn": 4
+      }
+    }
+  },
+  "gemma12b": {
+    "cars": {
+      "objects": {
+        "tp": 10,
+        "fp": 402,
+        "fn": 150
+      },
+      "background": {
+        "tp": 1,
+        "fp": 176,
+        "fn": 15
+      },
+      "position_logic": {
+        "tp": 26,
+        "fp": 215,
+        "fn": 101
+      },
+      "physical": {
+        "tp": 20,
+        "fp": 275,
+        "fn": 33
+      },
+      "object_omission": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 5
+      }
+    },
+    "clothes": {
+      "objects": {
+        "tp": 49,
+        "fp": 1002,
+        "fn": 321
+      },
+      "background": {
+        "tp": 2,
+        "fp": 61,
+        "fn": 70
+      },
+      "position_logic": {
+        "tp": 18,
+        "fp": 70,
+        "fn": 166
+      },
+      "physical": {
+        "tp": 0,
+        "fp": 115,
+        "fn": 18
+      },
+      "object_omission": {
+        "tp": 1,
+        "fp": 6,
+        "fn": 54
+      }
+    },
+    "cosmetics": {
+      "objects": {
+        "tp": 7,
+        "fp": 451,
+        "fn": 77
+      },
+      "background": {
+        "tp": 0,
+        "fp": 11,
+        "fn": 40
+      },
+      "position_logic": {
+        "tp": 22,
+        "fp": 328,
+        "fn": 51
+      },
+      "physical": {
+        "tp": 40,
+        "fp": 206,
+        "fn": 179
+      },
+      "object_omission": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0
+      }
+    },
+    "electronics": {
+      "objects": {
+        "tp": 10,
+        "fp": 550,
+        "fn": 166
+      },
+      "background": {
+        "tp": 0,
+        "fp": 120,
+        "fn": 6
+      },
+      "position_logic": {
+        "tp": 4,
+        "fp": 284,
+        "fn": 48
+      },
+      "physical": {
+        "tp": 45,
+        "fp": 326,
+        "fn": 136
+      },
+      "object_omission": {
+        "tp": 0,
+        "fp": 5,
+        "fn": 3
+      }
+    },
+    "furniture": {
+      "objects": {
+        "tp": 30,
+        "fp": 184,
+        "fn": 153
+      },
+      "background": {
+        "tp": 0,
+        "fp": 27,
+        "fn": 15
+      },
+      "position_logic": {
+        "tp": 22,
+        "fp": 124,
+        "fn": 54
+      },
+      "physical": {
+        "tp": 28,
+        "fp": 133,
+        "fn": 46
+      },
+      "object_omission": {
+        "tp": 0,
+        "fp": 2,
+        "fn": 9
+      }
+    }
+  }
+}
