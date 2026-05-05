@@ -27,6 +27,14 @@ from tasks.paired_object_evaluator import (
     PairedObjectEvaluator,
     process_object_consistency,
 )
+from tasks.physical_evaluator import (
+    PhysicalEvaluator,
+    process_physical_evaluation,
+)
+from tasks.position_logic_evaluator import (
+    PositionLogicEvaluator,
+    process_position_logic_evaluation,
+)
 from configs.config_schema import PipelineConfig
 
 
@@ -238,6 +246,18 @@ def main():
         logger.error(f"Configuration Error: {e}")
         return 1
 
+    import random
+    import numpy as np
+    import torch
+
+    seed = cfg.qwen.seed
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    logger.info(f"Seeded Python/numpy/torch with seed={seed} (cfg.qwen.seed)")
+
     all_target_items = resolve_data_ids(cfg)
 
     my_target_items = apply_sharding(all_target_items, cfg.shard_id, cfg.num_shards)
@@ -302,21 +322,49 @@ def main():
 
     obj_eval = PairedObjectEvaluator(engine=engine, config=cfg.object_eval)
 
-    final_results = process_object_consistency(
+    obj_results = process_object_consistency(
         input_data=bg_eval_outputs,
         evaluator=obj_eval,
         output_path=output_dir / f"object_consistency_results{suffix}.json",
     )
 
     obj_duration = time.time() - step_start
+    step_start = time.time()
+
+    logger.info("Starting Step 5: Physical Realism...")
+
+    phys_eval = PhysicalEvaluator(engine=engine, config=cfg.physical)
+
+    phys_results = process_physical_evaluation(
+        input_data=obj_results,
+        evaluator=phys_eval,
+        output_path=output_dir / f"physical_evaluation_results{suffix}.json",
+    )
+
+    phys_duration = time.time() - step_start
+    step_start = time.time()
+
+    logger.info("Starting Step 6: Position Logic...")
+
+    pos_eval = PositionLogicEvaluator(engine=engine, config=cfg.position_logic)
+
+    final_results = process_position_logic_evaluation(
+        input_data=phys_results,
+        evaluator=pos_eval,
+        output_path=output_dir / f"position_logic_evaluation_results{suffix}.json",
+    )
+
+    pos_duration = time.time() - step_start
     total_duration = time.time() - global_start_time
 
     logger.info("=" * 60)
     logger.info("PIPELINE EXECUTION SUMMARY")
-    logger.info(f"• Segmentation: {seg_duration:.2f}s")
-    logger.info(f"• Background:   {bg_duration:.2f}s")
-    logger.info(f"• Object Eval:  {obj_duration:.2f}s")
-    logger.info(f"• Total Time:   {total_duration:.2f}s")
+    logger.info(f"• Segmentation:    {seg_duration:.2f}s")
+    logger.info(f"• Background:      {bg_duration:.2f}s")
+    logger.info(f"• Object Eval:     {obj_duration:.2f}s")
+    logger.info(f"• Physical:        {phys_duration:.2f}s")
+    logger.info(f"• Position Logic:  {pos_duration:.2f}s")
+    logger.info(f"• Total Time:      {total_duration:.2f}s")
     logger.info("=" * 60)
 
     logger.info("Cleaning output for final report...")

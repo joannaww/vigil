@@ -93,9 +93,25 @@ class SAM3Segmenter:
 
         image_width, image_height = image.size
 
+        # SAM3 processor tokenizes with max_length=32 and no truncation, so we
+        # must truncate labels ourselves to avoid a ValueError on long prompts.
+        max_tokens = 32
+        truncated_labels = [
+            self.processor.tokenizer.decode(
+                self.processor.tokenizer.encode(label, truncation=True, max_length=max_tokens),
+                skip_special_tokens=True,
+            )
+            for label in labels
+        ]
+        if truncated_labels != labels:
+            truncated = [o for o, t in zip(labels, truncated_labels) if o != t]
+            logger.warning(
+                "Labels truncated to %d tokens for SAM3: %s", max_tokens, truncated
+            )
+
         inputs = self.processor(
-            images=[image] * len(labels),
-            text=labels,
+            images=[image] * len(truncated_labels),
+            text=truncated_labels,
             return_tensors="pt",
         ).to(self.device)
 

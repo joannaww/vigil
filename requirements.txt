@@ -47,7 +47,7 @@ filelock==3.20.3
 flashinfer-python==0.5.3
 fonttools==4.61.1
 frozenlist==1.8.0
-fsspec==2026.1.0
+fsspec==2025.10.0
 gguf==0.17.1
 google-ai-generativelanguage==0.6.15
 google-api-core==2.29.0
@@ -94,7 +94,6 @@ msgpack==1.1.2
 msgspec==0.20.0
 multidict==6.7.0
 multiprocess==0.70.18
--e git+ssh://git@github.com/joannaww/auto-qa.git@2dcbc6f033e44dc3ed6c728cfca4e23d7080afbc#egg=my_project_name
 networkx==3.6.1
 ninja==1.13.0
 numba==0.61.2

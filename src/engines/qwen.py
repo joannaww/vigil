@@ -46,6 +46,7 @@ class QwenEngine:
         sampling_params = SamplingParams(
             temperature=self.config.temperature,
             max_tokens=self.config.max_new_tokens,
+            seed=self.config.seed,
         )
         inputs = []
 

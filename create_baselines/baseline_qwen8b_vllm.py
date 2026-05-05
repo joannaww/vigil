@@ -1,18 +1,32 @@
 import os
 import json
 import base64
+import random
 from io import BytesIO
 from typing import Dict, Any, Optional, List
 from PIL import Image
 from pydantic import BaseModel, Field
 from tqdm import tqdm
 
+import numpy as np
+import torch
+
 from vllm import LLM, SamplingParams
 from vllm.sampling_params import StructuredOutputsParams
+
+SEED = 42
+
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
 
 class HallucinationBaseline(BaseModel):
     objects: str = Field(description="Semantic description of object hallucinations.")
     background: str = Field(description="Semantic description of background hallucinations.")
+    position_logic: str = Field(description="Semantic description of position logic hallucination")
+    physical: str = Field(description="Semantic description of physical hallucination")
     object_omission: str = Field(description="Semantic description of object omission hallucinations.")
 
 BASE_PROMPT_TEMPLATE = """You are an image re-contextualization hallucination inspector.
@@ -31,16 +45,18 @@ CRITICAL RULES:
 Categories:
 1) objects: Object Visual Fidelity - texture/shape/color identity mismatches, mutations, identity loss, reference bleeding. Example: "Feature Mutation: sofa's color changed from dark green to black."
 2) background: Background Fidelity - background mutations, background detail loss, context swap. Example: "Background Mutation: wall color changed."
-3) object_omission: Object Omission - missing required objects from the instruction that should have been pasted from object image. Example: "Object Omission: green cabinet missing."
+3) position_logic: Spatial and Instructional Fidelity - misplacement of inserted object, replacement failure (the item that should have been replaces remain in the image). Example: "Misplacement: The green chair is on the right side of the bed instead of the left side."
+4) physical: Physical and Integration Fidelity - lighting/shadow incoherence, perspective/scale issues, artifacts (unnatural phenomena). Example: "Shadow Incoherence: The is no shadow under the inserted chair."
+5) object_omission: Object Omission - missing required objects from the instruction that should have been pasted from object image. Example: "Object Omission: green cabinet missing."
 
 Example output if only objects have issues:
-{{"objects": "Color mismatch: car is blue instead of red.", "background": "", "object_omission": ""}}
+{{"objects": "Color mismatch: car is blue instead of red.", "background": "", "position_logic": "", "physical": "", "object_omission": ""}}
 
 Instruction Prompt:
 {instruction_prompt}
 
 Analyze the provided images now.
-Return only a JSON object with keys: objects, background, object_omission."""
+Return only a JSON object with keys: objects, background, position_logic, physical, object_omission."""
 
 def image_to_base64(image_path: str) -> str:
     with Image.open(image_path) as img:
@@ -84,6 +100,7 @@ def process_dataset(dataset_info, llm):
     sampling_params = SamplingParams(
         max_tokens=512,
         temperature=0,
+        seed=SEED,
         structured_outputs=StructuredOutputsParams(json=HallucinationBaseline.model_json_schema())
     )
 
@@ -132,31 +149,25 @@ def main():
     llm = LLM(
         model="Qwen/Qwen3-VL-8B-Instruct",
         tensor_parallel_size=1,
-        max_model_len=64000,  
-        max_num_seqs=2,  
+        max_model_len=64000,
+        max_num_seqs=2,
         trust_remote_code=True,
         dtype="bfloat16",
         gpu_memory_utilization=0.90,
-        limit_mm_per_prompt={"image": 4}, 
+        limit_mm_per_prompt={"image": 4},
+        seed=SEED,
     )
 
-    # complete paths before running
+    DATA_ROOT = "/net/pr2/projects/plgrid/plggrecontext/joanna/vigil/vigil/data"
+    CATEGORIES = ["cars", "clothes", "cosmetics", "electronics", "furniture"]
+
     DATASETS = [
-        {"input": "", 
-         "data_dir": "", 
-         "output": ""},
-        {"input": "", 
-         "data_dir": "", 
-         "output": ""},
-        {"input": "", 
-         "data_dir": "", 
-         "output": ""},
-        {"input": "", 
-         "data_dir": "", 
-         "output": ""},
-        {"input": "", 
-         "data_dir": "", 
-         "output": ""},
+        {
+            "input": os.path.join(DATA_ROOT, cat, "annotations.json"),
+            "data_dir": os.path.join(DATA_ROOT, cat, "data"),
+            "output": os.path.join(DATA_ROOT, cat, "baseline_qwen8b.json"),
+        }
+        for cat in CATEGORIES
     ]
 
     for ds in DATASETS:

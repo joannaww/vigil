@@ -2,13 +2,14 @@ import json
 import pandas as pd
 from pathlib import Path
 
-CATEGORIES = ['cars', 'clothes', 'consumer_goods', 'electronics', 'furniture']
-HALLUCINATION_TYPES = ['objects', 'background', 'object_omission']
+CATEGORIES = ['cars', 'clothes', 'cosmetics', 'electronics', 'furniture']
+HALLUCINATION_TYPES = ['objects', 'background', 'position_logic', 'physical', 'object_omission']
 
-# complete paths before running
-DATA_DIR = Path("./data") 
-MODELS = ['qwen', 'gemini', 'gemma'] 
-GT_SUFFIX = ""
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+DATA_DIR = REPO_ROOT / "data"
+EVAL_DIR = REPO_ROOT / "evaluations"
+MODELS = ['qwen8b', 'gemini', 'gemma12b']
 
 def calculate_all_metrics(tp, fp, fn):
     """Counts Precision, Recall and F1 from raw TP/FP/FN."""
@@ -41,8 +42,8 @@ def run_comparison_report():
         cat_stats = {}
         
         for cat in CATEGORIES:
-            gt_path = DATA_DIR / cat / f'annotations_{cat}_{GT_SUFFIX}.json'
-            pred_path = DATA_DIR / cat / f'annotations_{cat}_baseline_{model_name}.json'
+            gt_path = DATA_DIR / cat / 'annotations.json'
+            pred_path = DATA_DIR / cat / f'baseline_{model_name}.json'
             
             if not gt_path.exists() or not pred_path.exists():
                 print(f"Missing files for {model_name} in category {cat}. Skipping.")
@@ -76,10 +77,15 @@ def run_comparison_report():
                 r_list.append(r)
                 f1_list.append(f1)
             
+            n_types = len(HALLUCINATION_TYPES)
             cat_stats[cat] = {
-                'f1': sum(f1_list) / 3,
-                'p': sum(p_list) / 3,
-                'r': sum(r_list) / 3
+                'f1': sum(f1_list) / n_types,
+                'p': sum(p_list) / n_types,
+                'r': sum(r_list) / n_types,
+                'per_type': {
+                    ht: {'p': p_list[i], 'r': r_list[i], 'f1': f1_list[i]}
+                    for i, ht in enumerate(HALLUCINATION_TYPES)
+                },
             }
 
         if not cat_stats: continue
@@ -106,16 +112,19 @@ def run_comparison_report():
         data.append(row)
 
     df = pd.DataFrame(data)
-    
-    report_file = "BASELINE_COMPARE_4PLUS1_FIXED.txt"
+
+    EVAL_DIR.mkdir(parents=True, exist_ok=True)
+    report_file = EVAL_DIR / "BASELINES_CLASSIFICATION_4PLUS1_EVALUATION.txt"
     with open(report_file, "w", encoding='utf-8') as f:
-        f.write("COMPARISON REPORT: QWEN vs GEMINI VS GEMMA\n")
+        f.write("COMPARISON REPORT: " + " vs ".join(m.upper() for m in MODELS) + "\n")
         f.write(format_ranking(df, "Macro Average (All 5 Categories)", "ALL_Macro_F1"))
-        
+
         for cat in CATEGORIES:
             f.write(f"\n\n --- CATEGORY ANALYSIS: {cat.upper()} ---")
             f.write(format_ranking(df, f"Only {cat}", f"Only_{cat}_F1"))
             f.write(format_ranking(df, f"Stability: Macro without {cat}", f"4excl_{cat}_Macro_F1"))
+
+    print(f"Saved report to: {report_file}")
 
 if __name__ == "__main__":
     run_comparison_report()

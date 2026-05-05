@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 hf_token = os.getenv("HF_TOKEN")
 
-repo_id = "hallucinators/seeing-what-isnt-there"
+repo_id = "joannaww/VIGIL"
 
 scratch_dir = os.environ.get("PWD")
 local_folder = os.path.join(scratch_dir, "data")
