@@ -17,21 +17,33 @@ _NUMBERED_LINE = re.compile(r"^\s*\d+[.)]\s*(.+)$")
 
 class PositionLogicEvaluator:
     """
-    Detects position_logic hallucinations in two passes:
-      1. distiller: text-only Qwen extracts atomic spatial constraints from the prompt.
-      2. scene-pass: VLM compares background vs annotated generated, verifies the
-         distilled checklist, and scans for visible leftovers — all in a single
-         call per datapoint that returns structured JSON.
+    Detects position_logic hallucinations in two stages:
+
+      1. Distiller (text-only Qwen): extracts atomic spatial constraints from
+         the user prompt.
+
+      2. Verification:
+         (a) per-constraint micro-pass — one VLM call per atomic constraint,
+             returns {satisfied, violation}. Higher recall (the model only has
+             to think about ONE thing at a time);
+         (b) leftover check — one VLM call per datapoint, returns
+             {leftover_detected, description}.
+
+    The legacy single-call scene-pass (verifies the whole checklist + leftover
+    in one call) is kept behind `config.use_per_constraint_pass=False` for
+    backward compatibility.
     """
 
     def __init__(self, engine: QwenEngine, config: PositionLogicEvaluatorConfig):
         self.engine = engine
         self.config = config
+        mode = "per-constraint micro-pass + leftover" if config.use_per_constraint_pass else "single-call scene-pass"
         logger.info(
-            f"PositionLogicEvaluator initialized "
+            f"PositionLogicEvaluator initialized [{mode}] "
             f"(scene_resolution={config.scene_resolution}, "
             f"distiller_batch={config.distiller_batch_size}, "
-            f"scene_batch={config.scene_batch_size})"
+            f"scene_batch={config.scene_batch_size}, "
+            f"constraint_batch={config.constraint_batch_size})"
         )
 
     def distill_constraints_batch(
@@ -47,7 +59,37 @@ class PositionLogicEvaluator:
             return [{"raw": "", "items": []} for _ in prompts]
         return [self._parse_distiller(r) for r in responses]
 
+    def verify_constraint_batch(self, jobs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """One VLM call per (bg_img, gen_img, constraint) tuple."""
+        if not jobs:
+            return []
+        prompts = [
+            self.config.single_constraint_prompt.format(constraint=j["constraint"])
+            for j in jobs
+        ]
+        images = [[j["bg_img"], j["gen_img"]] for j in jobs]
+        try:
+            raw_responses = self.engine.generate(prompts, images=images)
+        except Exception as e:
+            logger.error(f"Constraint verification batch failed: {e}")
+            return [self._empty_constraint_result() for _ in jobs]
+        return [self._parse_constraint(r) for r in raw_responses]
+
+    def check_leftover_batch(self, jobs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """One VLM call per (bg_img, gen_img) datapoint to detect leftovers."""
+        if not jobs:
+            return []
+        prompts = [self.config.leftover_prompt for _ in jobs]
+        images = [[j["bg_img"], j["gen_img"]] for j in jobs]
+        try:
+            raw_responses = self.engine.generate(prompts, images=images)
+        except Exception as e:
+            logger.error(f"Leftover check batch failed: {e}")
+            return [self._empty_leftover_result() for _ in jobs]
+        return [self._parse_leftover(r) for r in raw_responses]
+
     def verify_scene_batch(self, jobs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Legacy single-call scene-pass (used only when use_per_constraint_pass=False)."""
         if not jobs:
             return []
         prompts = [
@@ -98,6 +140,59 @@ class PositionLogicEvaluator:
             "leftover_description": "",
             "raw": "",
             "parse_ok": False,
+        }
+
+    def _empty_constraint_result(self) -> Dict[str, Any]:
+        return {"satisfied": True, "violation": "", "raw": "", "parse_ok": False}
+
+    def _empty_leftover_result(self) -> Dict[str, Any]:
+        return {"leftover_detected": False, "leftover_description": "", "raw": "", "parse_ok": False}
+
+    def _strip_json_fences(self, raw: str) -> str:
+        return re.sub(r"^```json\s*|^```\s*|```$", "", raw, flags=re.MULTILINE).strip()
+
+    def _parse_constraint(self, text: str) -> Dict[str, Any]:
+        if not text:
+            return self._empty_constraint_result()
+        raw = text.strip()
+        s = self._strip_json_fences(raw)
+        try:
+            obj = json.loads(s)
+        except Exception:
+            m = re.search(r"\{.*\}", s, re.DOTALL)
+            if not m:
+                return {**self._empty_constraint_result(), "raw": raw}
+            try:
+                obj = json.loads(m.group(0))
+            except Exception:
+                return {**self._empty_constraint_result(), "raw": raw}
+        return {
+            "satisfied": bool(obj.get("satisfied", True)),
+            "violation": str(obj.get("violation", "")).strip(),
+            "raw": raw,
+            "parse_ok": True,
+        }
+
+    def _parse_leftover(self, text: str) -> Dict[str, Any]:
+        if not text:
+            return self._empty_leftover_result()
+        raw = text.strip()
+        s = self._strip_json_fences(raw)
+        try:
+            obj = json.loads(s)
+        except Exception:
+            m = re.search(r"\{.*\}", s, re.DOTALL)
+            if not m:
+                return {**self._empty_leftover_result(), "raw": raw}
+            try:
+                obj = json.loads(m.group(0))
+            except Exception:
+                return {**self._empty_leftover_result(), "raw": raw}
+        return {
+            "leftover_detected": bool(obj.get("leftover_detected", False)),
+            "leftover_description": str(obj.get("description") or obj.get("leftover_description") or "").strip(),
+            "raw": raw,
+            "parse_ok": True,
         }
 
     def _parse_scene(self, text: str) -> Dict[str, Any]:
@@ -163,9 +258,18 @@ def process_position_logic_evaluation(
 ) -> List[Dict[str, Any]]:
     """
     Pipeline Step 6: Position Logic Check.
+
+    Two stages:
+      A) Distill atomic spatial constraints from each prompt (text-only Qwen).
+      B) Verify constraints against (background, generated) image pair.
+         If config.use_per_constraint_pass=True (default):
+           - one VLM call per atomic constraint, plus
+           - one leftover check per datapoint.
+         Else (legacy): one combined VLM call per datapoint covering everything.
+
     Adds 'position_logic_evaluation' to each datapoint with:
       - constraints: distilled atomic spatial constraints from the prompt
-      - scene_analysis: structured VLM verdict (per-constraint + leftover)
+      - scene_analysis: structured verdict (per-constraint + leftover)
       - text: single string violation summary for downstream comparison with GT
     """
 
@@ -182,6 +286,7 @@ def process_position_logic_evaluation(
             },
         )
 
+    # Stage A: distill atomic constraints from every prompt (text-only).
     prompts_to_distill = [dp.get("text_prompt") or "" for dp in input_data]
     bs = cfg.distiller_batch_size
     for i in range(0, len(prompts_to_distill), bs):
@@ -190,17 +295,10 @@ def process_position_logic_evaluation(
         for j, res in enumerate(results):
             input_data[i + j]["position_logic_evaluation"]["constraints"] = res
 
-    scene_buffer: List[Dict[str, Any]] = []
-    scene_buffer_idx: List[int] = []
-
-    def flush_scenes():
-        if not scene_buffer:
-            return
-        results = evaluator.verify_scene_batch(scene_buffer)
-        for dp_idx, scene_obj in zip(scene_buffer_idx, results):
-            input_data[dp_idx]["position_logic_evaluation"]["scene_analysis"] = scene_obj
-        scene_buffer.clear()
-        scene_buffer_idx.clear()
+    # Stage B: verify. Build per-dp image pairs, then dispatch to either the
+    # per-constraint micro-pass + leftover (default) or the legacy single-call
+    # scene-pass.
+    dp_ctx: Dict[int, Dict[str, Any]] = {}
 
     for dp_idx, dp in enumerate(input_data):
         gen_data = dp.get("generated_result")
@@ -242,23 +340,17 @@ def process_position_logic_evaluation(
         bg_img = evaluator._resize(bg_img, cfg.scene_resolution)
         annotated = evaluator._resize(annotated, cfg.scene_resolution)
 
-        constraints = dp["position_logic_evaluation"]["constraints"]
-        checklist_text = constraints.get("raw") or "NONE — no spatial constraints extracted from prompt."
-
-        scene_buffer.append(
-            {"checklist": checklist_text, "bg_img": bg_img, "gen_img": annotated}
-        )
-        scene_buffer_idx.append(dp_idx)
-
         if cfg.save_viz:
             viz_dir = f"{cfg.output_dir}/{dp.get('id', dp_idx)}/{cfg.viz_dir}/position_logic"
             Path(viz_dir).mkdir(parents=True, exist_ok=True)
             save_visualization(annotated, f"{viz_dir}/scene_with_bboxes.jpg")
 
-        if len(scene_buffer) >= cfg.scene_batch_size:
-            flush_scenes()
+        dp_ctx[dp_idx] = {"bg_img": bg_img, "gen_img": annotated}
 
-    flush_scenes()
+    if cfg.use_per_constraint_pass:
+        _run_per_constraint_pass(input_data, dp_ctx, evaluator, cfg)
+    else:
+        _run_single_scene_pass(input_data, dp_ctx, evaluator, cfg)
 
     for dp in input_data:
         ple = dp["position_logic_evaluation"]
@@ -272,3 +364,100 @@ def process_position_logic_evaluation(
 
     logger.info(f"Position-logic evaluation done for {n} datapoints.")
     return input_data
+
+
+def _run_per_constraint_pass(
+    input_data: List[Dict[str, Any]],
+    dp_ctx: Dict[int, Dict[str, Any]],
+    evaluator: PositionLogicEvaluator,
+    cfg: PositionLogicEvaluatorConfig,
+) -> None:
+    """One VLM call per atomic constraint + one leftover call per datapoint."""
+
+    # 1) Per-constraint jobs: one entry per (dp_idx, constraint_idx).
+    constraint_jobs: List[Dict[str, Any]] = []
+    constraint_keys: List[Tuple[int, int]] = []
+    for dp_idx, ctx in dp_ctx.items():
+        items = (input_data[dp_idx]["position_logic_evaluation"]["constraints"]
+                 .get("items") or [])
+        for c_idx, c_text in enumerate(items):
+            if not c_text:
+                continue
+            constraint_jobs.append({
+                "bg_img": ctx["bg_img"], "gen_img": ctx["gen_img"], "constraint": c_text,
+            })
+            constraint_keys.append((dp_idx, c_idx))
+
+    # Initialize scene_analysis with one entry per known constraint, default satisfied.
+    for dp_idx, ctx in dp_ctx.items():
+        items = (input_data[dp_idx]["position_logic_evaluation"]["constraints"]
+                 .get("items") or [])
+        scene = evaluator._empty_scene_result()
+        scene["constraints"] = [
+            {"constraint": c, "satisfied": True, "violation": ""} for c in items
+        ]
+        scene["parse_ok"] = True
+        input_data[dp_idx]["position_logic_evaluation"]["scene_analysis"] = scene
+
+    # Flush in batches of constraint_batch_size.
+    bs = max(1, cfg.constraint_batch_size)
+    for i in range(0, len(constraint_jobs), bs):
+        batch = constraint_jobs[i : i + bs]
+        keys = constraint_keys[i : i + bs]
+        results = evaluator.verify_constraint_batch(batch)
+        for (dp_idx, c_idx), res in zip(keys, results):
+            scene = input_data[dp_idx]["position_logic_evaluation"]["scene_analysis"]
+            if c_idx < len(scene["constraints"]):
+                scene["constraints"][c_idx]["satisfied"] = bool(res.get("satisfied", True))
+                scene["constraints"][c_idx]["violation"] = str(res.get("violation", "")).strip()
+
+    # 2) Leftover jobs: one per datapoint with images.
+    leftover_jobs: List[Dict[str, Any]] = []
+    leftover_keys: List[int] = []
+    for dp_idx, ctx in dp_ctx.items():
+        leftover_jobs.append({"bg_img": ctx["bg_img"], "gen_img": ctx["gen_img"]})
+        leftover_keys.append(dp_idx)
+
+    bs = max(1, cfg.scene_batch_size)
+    for i in range(0, len(leftover_jobs), bs):
+        batch = leftover_jobs[i : i + bs]
+        keys = leftover_keys[i : i + bs]
+        results = evaluator.check_leftover_batch(batch)
+        for dp_idx, res in zip(keys, results):
+            scene = input_data[dp_idx]["position_logic_evaluation"]["scene_analysis"]
+            scene["leftover_detected"] = bool(res.get("leftover_detected", False))
+            scene["leftover_description"] = str(res.get("leftover_description", "")).strip()
+
+
+def _run_single_scene_pass(
+    input_data: List[Dict[str, Any]],
+    dp_ctx: Dict[int, Dict[str, Any]],
+    evaluator: PositionLogicEvaluator,
+    cfg: PositionLogicEvaluatorConfig,
+) -> None:
+    """Legacy single-call path: combined per-checklist + leftover in one VLM call."""
+
+    scene_buffer: List[Dict[str, Any]] = []
+    scene_buffer_idx: List[int] = []
+
+    def flush_scenes():
+        if not scene_buffer:
+            return
+        results = evaluator.verify_scene_batch(scene_buffer)
+        for dp_idx, scene_obj in zip(scene_buffer_idx, results):
+            input_data[dp_idx]["position_logic_evaluation"]["scene_analysis"] = scene_obj
+        scene_buffer.clear()
+        scene_buffer_idx.clear()
+
+    for dp_idx, ctx in dp_ctx.items():
+        constraints = input_data[dp_idx]["position_logic_evaluation"]["constraints"]
+        checklist_text = constraints.get("raw") or "NONE — no spatial constraints extracted from prompt."
+        scene_buffer.append({
+            "checklist": checklist_text,
+            "bg_img": ctx["bg_img"],
+            "gen_img": ctx["gen_img"],
+        })
+        scene_buffer_idx.append(dp_idx)
+        if len(scene_buffer) >= cfg.scene_batch_size:
+            flush_scenes()
+    flush_scenes()

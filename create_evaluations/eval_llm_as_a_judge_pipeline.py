@@ -73,7 +73,7 @@ JUDGE_TERMINAL_STATES = {
 
 RUN_NAME_RE = re.compile(
     r"^run_(?P<idx>\d+)_th(?P<threshold>\d+\.\d+)_mg(?P<margin>\d+\.\d+)_"
-    r"(?P<boxes>boxes|noboxes)_pad(?P<padding>\d+\.\d+)$"
+    r"(?P<boxes>boxes|noboxes)_pad(?P<padding>\d+\.\d+)(?:_(?P<version>v\d+))?$"
 )
 
 
@@ -133,13 +133,15 @@ PACKED_HEADER = ('Respond with a JSON array of objects. Each object MUST have: '
 def parse_run_name(run_name: str) -> Dict[str, object]:
     m = RUN_NAME_RE.match(run_name)
     if not m:
-        return {"idx": None, "threshold": None, "margin": None, "boxes": None, "padding": None}
+        return {"idx": None, "threshold": None, "margin": None,
+                "boxes": None, "padding": None, "version": None}
     return {
         "idx": int(m["idx"]),
         "threshold": float(m["threshold"]),
         "margin": float(m["margin"]),
         "boxes": m["boxes"] == "boxes",
         "padding": float(m["padding"]),
+        "version": m["version"] or "v1",
     }
 
 
@@ -402,6 +404,7 @@ def build_csv_row(run_name: str, cat_stats: Dict[str, Dict[str, Any]]) -> Dict[s
     params = parse_run_name(run_name)
     row: Dict[str, object] = {
         "Run": run_name,
+        "Version": params.get("version") or "v1",
         "Threshold": params["threshold"],
         "Margin": params["margin"],
         "Boxes": params["boxes"],

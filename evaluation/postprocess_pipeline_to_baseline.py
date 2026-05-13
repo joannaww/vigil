@@ -23,7 +23,7 @@ import re
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 try:
     import dotenv  # type: ignore
@@ -43,6 +43,8 @@ CLEAN_BG_EXACT = {
     "no visible inconsistencies", "no visible issues",
     "no visible hallucinations", "no visible errors",
     "no visible error", "no errors", "no error",
+    # VLM sometimes literally echoes the example empty-string marker:
+    "\"\"", "''", "<empty>", "<empty string>", "empty string", "empty",
 }
 
 CLEAN_BG_PREFIXES = (
@@ -71,6 +73,30 @@ CLEAN_BG_PREFIXES = (
     "image 2 appears consistent",
 )
 
+# Substring patterns for false-positive bg mutations the VLM tends to invent
+# despite the tightened prompt. These are subtle texture/coloration descriptors
+# that humans never flag but the VLM hallucinates as "Background Mutation: ...".
+# If a text contains one of these AND nothing more substantive, treat as clean.
+CLEAN_BG_NOISE_SUBSTRINGS = (
+    "more uniformly",
+    "more uniform",
+    "less varied",
+    "more varied",
+    "appearing smoother",
+    "appears smoother",
+    "appearing slightly",
+    "appears slightly",
+    "subtly different",
+    "slightly different texture",
+    "slightly different coloration",
+    "slightly more saturated",
+    "slightly less saturated",
+    "noticeably different texture",
+    "different texture and coloration",
+    "smoother and more uniform",
+    "smoother, more uniform",
+)
+
 
 def is_clean_background(text: str) -> bool:
     """Heuristic: True if the background_evaluation text indicates no hallucination."""
@@ -81,7 +107,13 @@ def is_clean_background(text: str) -> bool:
         return True
     if s.rstrip(".") in CLEAN_BG_EXACT:
         return True
-    return s.startswith(CLEAN_BG_PREFIXES)
+    if s.startswith(CLEAN_BG_PREFIXES):
+        return True
+    # If the entire mutation description boils down to one of the subtle-noise
+    # phrasings AND is short (<=2 sentences), treat as clean false positive.
+    if len(s) < 400 and any(phrase in s for phrase in CLEAN_BG_NOISE_SUBSTRINGS):
+        return True
+    return False
 
 
 def category_and_dp_id_from_path(gen_path: str) -> Optional[Tuple[str, str]]:
@@ -448,6 +480,19 @@ def write_run_outputs(run_dir: Path,
     return counts
 
 
+def is_run_already_processed(run_name: str) -> bool:
+    """True if at least one data/<cat>/pipeline_<run_name>.json already exists.
+    Used to skip already-postprocessed runs on retry after a partial timeout."""
+    return bool(list(DATA_DIR.glob(f"*/pipeline_{run_name}.json")))
+
+
+def strip_judge_ids(by_category: Dict[str, List[Dict[str, Any]]]) -> None:
+    """Pop _judge_id from every entry (in place)."""
+    for entries in by_category.values():
+        for e in entries:
+            e.pop("_judge_id", None)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -467,6 +512,11 @@ def main():
              "Requires GEMINI_API_KEY/GOOGLE_API_KEY (auto-loaded from .env). "
              "Tunable via env: JUDGE_MODEL, JUDGE_POLL_INTERVAL_S, "
              "JUDGE_PACK_SIZE, JUDGE_WAVE_SIZE, JUDGE_SUBMIT_MAX_RETRIES.",
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help="Re-process runs whose data/<cat>/pipeline_<run>.json files already "
+             "exist. Default is to skip them (idempotent retry after timeout).",
     )
     args = parser.parse_args()
 
@@ -494,6 +544,24 @@ def main():
     if not runs:
         raise SystemExit("No runs to process.")
 
+    # Skip runs whose data/<cat>/pipeline_<run>.json files already exist (any cat).
+    # This makes retries after a partial-timeout idempotent: previously-finished
+    # runs are not re-judged, only the missing ones are. Use --force to override.
+    if not args.force:
+        already = [r for r in runs if is_run_already_processed(r.name)]
+        runs = [r for r in runs if not is_run_already_processed(r.name)]
+        if already:
+            print(f"Skipping {len(already)} runs already postprocessed "
+                  f"(use --force to re-process):")
+            for r in already[:10]:
+                print(f"  [skip-existing] {r.name}")
+            if len(already) > 10:
+                print(f"  ... and {len(already) - 10} more")
+
+    if not runs:
+        print("All runs already postprocessed. Nothing to do.")
+        return
+
     print(f"Processing {len(runs)} runs from {args.grid_dir}")
     print("-" * 80)
 
@@ -511,10 +579,32 @@ def main():
               f"{n_pending} bg-texts pending judge"
               + (f"  [skipped {skipped}]" if skipped else ""))
 
-    # Phase 2: if --use-gemini-judge, submit batches in waves of JUDGE_WAVE_SIZE,
-    # then wait for ALL submitted jobs in a single polling loop. Waves keep us
-    # below per-project concurrent-batch limits without serializing entirely.
-    run_to_clean: Dict[str, Dict[str, bool]] = {}
+    # Index converted entries by run name so per-wave handlers can find them.
+    converted_by_name: Dict[str, Tuple[Path, Dict[str, List[Dict[str, Any]]], Dict[str, str], int]] = {
+        run.name: (run, by_cat, tb, sk) for run, by_cat, tb, sk in converted
+    }
+    written: Set[str] = set()
+    grand_total = defaultdict(int)
+
+    def _flush_run(run_name: str) -> None:
+        """Strip judge ids and write per-cat JSONs for one run. Idempotent."""
+        if run_name in written:
+            return
+        run, by_cat, _, skipped = converted_by_name[run_name]
+        strip_judge_ids(by_cat)
+        counts = write_run_outputs(run, by_cat)
+        written.add(run_name)
+        for c, n in counts.items():
+            grand_total[c] += n
+        cat_summary = ", ".join(f"{c}={n}" for c, n in sorted(counts.items()))
+        extra = f"  [skipped {skipped}]" if skipped else ""
+        print(f"  [write] {run_name}: {sum(counts.values())} entries  ({cat_summary}){extra}")
+
+    # Phase 2: if --use-gemini-judge, submit batches in waves of JUDGE_WAVE_SIZE.
+    # After each wave's polling completes, immediately apply judge results AND
+    # write per-cat JSONs for those runs — so a later TIMEOUT cannot lose
+    # already-judged work. Runs without pending bg-texts (heuristic-only) are
+    # written in Phase 3 below.
     if args.use_gemini_judge:
         runs_with_pending = [(run, t) for run, _, t, _ in converted if t]
         any_pending = sum(len(t) for _, t in runs_with_pending)
@@ -527,8 +617,6 @@ def main():
                   f"~{(any_pending + JUDGE_PACK_SIZE - 1) // JUDGE_PACK_SIZE} packed requests) "
                   f"in waves of {JUDGE_WAVE_SIZE}...")
 
-            job_to_run: Dict[str, Path] = {}
-
             for wave_start in range(0, len(runs_with_pending), JUDGE_WAVE_SIZE):
                 wave = runs_with_pending[wave_start:wave_start + JUDGE_WAVE_SIZE]
                 wave_idx = wave_start // JUDGE_WAVE_SIZE + 1
@@ -536,11 +624,12 @@ def main():
                 print(f"\n--- Wave {wave_idx}/{n_waves}: submitting {len(wave)} batch jobs ---")
 
                 wave_jobs: List[str] = []
+                wave_job_to_run: Dict[str, Path] = {}
                 for run, texts_by_id in wave:
                     display = f"vigil_{run.name}_{int(time.time())}"
                     job_name = submit_judge_batch(client, texts_by_id, display)
                     if job_name:
-                        job_to_run[job_name] = run
+                        wave_job_to_run[job_name] = run
                         wave_jobs.append(job_name)
                         n_packs = (len(texts_by_id) + JUDGE_PACK_SIZE - 1) // JUDGE_PACK_SIZE
                         print(f"  [submit] {run.name}: job={job_name} "
@@ -548,38 +637,28 @@ def main():
                     else:
                         print(f"  [submit] {run.name}: SKIPPED (submit failed permanently)")
 
-                if not wave_jobs:
-                    continue
+                if wave_jobs:
+                    print(f"\n--- Wave {wave_idx}/{n_waves}: waiting for {len(wave_jobs)} jobs ---")
+                    finished = wait_for_jobs(client, wave_jobs)
+                    for jn, job in finished.items():
+                        run = wave_job_to_run[jn]
+                        clean_map = download_judge_result(client, job)
+                        _, by_cat, tb, _ = converted_by_name[run.name]
+                        cleared = apply_clean_map(by_cat, clean_map)
+                        print(f"  [judge] {run.name}: cleared {cleared}/{len(tb)}")
 
-                print(f"\n--- Wave {wave_idx}/{n_waves}: waiting for {len(wave_jobs)} jobs ---")
-                finished = wait_for_jobs(client, wave_jobs)
-                for jn, job in finished.items():
-                    run = job_to_run[jn]
-                    run_to_clean[run.name] = download_judge_result(client, job)
+                # Write outputs for every run in this wave (whether submit/judge
+                # succeeded or not — failed submits still get heuristic-only data
+                # written so the file exists and skip-existing works on retry).
+                for run, _ in wave:
+                    _flush_run(run.name)
+                print(f"--- Wave {wave_idx}/{n_waves}: wrote {len(wave)} runs ---")
 
-            for run, by_category, texts_by_id, _ in converted:
-                if not texts_by_id:
-                    continue
-                clean_map = run_to_clean.get(run.name, {})
-                cleared = apply_clean_map(by_category, clean_map)
-                print(f"  [judge] {run.name}: cleared {cleared}/{len(texts_by_id)}")
-
-    # Make sure we strip lingering _judge_id keys even when judge was skipped
-    for _, by_category, _, _ in converted:
-        for entries in by_category.values():
-            for e in entries:
-                e.pop("_judge_id", None)
-
-    # Phase 3: write outputs
-    print("\nWriting per-category JSONs...")
-    grand_total = defaultdict(int)
-    for run, by_category, _, skipped in converted:
-        counts = write_run_outputs(run, by_category)
-        for c, n in counts.items():
-            grand_total[c] += n
-        cat_summary = ", ".join(f"{c}={n}" for c, n in sorted(counts.items()))
-        extra = f"  [skipped {skipped}]" if skipped else ""
-        print(f"  {run.name}: {sum(counts.values())} entries  ({cat_summary}){extra}")
+    # Phase 3: write any runs that were not written in Phase 2 (heuristic-only,
+    # or non-judge mode entirely).
+    print("\nWriting per-category JSONs for remaining runs...")
+    for run, _, _, _ in converted:
+        _flush_run(run.name)
 
     print("-" * 80)
     print("Summary across all runs:")

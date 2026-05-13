@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=vigil_postprocess
-#SBATCH --time=4:00:00
+#SBATCH --time=10:00:00
 #SBATCH --nodes=1
 #SBATCH --account=plgroomagine-gpu-a100
 #SBATCH --partition=plgrid-gpu-a100
@@ -39,5 +39,6 @@ else
 fi
 
 export PYTHONPATH="$PWD/src:$PWD:$PYTHONPATH"
+export PYTHONUNBUFFERED=1
 
-python3 evaluation/postprocess_pipeline_to_baseline.py "$@"
+python3 -u evaluation/postprocess_pipeline_to_baseline.py "$@"

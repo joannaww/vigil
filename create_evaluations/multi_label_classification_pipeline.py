@@ -33,24 +33,26 @@ DEFAULT_OUTPUT = EVAL_DIR / "PIPELINE_CLASSIFICATION_GRID_SEARCH.csv"
 
 RUN_NAME_RE = re.compile(
     r"^run_(?P<idx>\d+)_th(?P<threshold>\d+\.\d+)_mg(?P<margin>\d+\.\d+)_"
-    r"(?P<boxes>boxes|noboxes)_pad(?P<padding>\d+\.\d+)$"
+    r"(?P<boxes>boxes|noboxes)_pad(?P<padding>\d+\.\d+)(?:_(?P<version>v\d+))?$"
 )
 
 
 def parse_run_name(run_name: str) -> Dict[str, object]:
     """Extract grid params from a run name like
-    `run_47_th0.5_mg0.2_boxes_pad0.5`. Returns dict with idx/threshold/margin/
-    boxes/padding, or {'idx': None} if the name doesn't match (still usable)."""
+    `run_47_th0.5_mg0.2_boxes_pad0.5` or `run_6_th0.2_mg0.1_noboxes_pad1.0_v2`.
+    Returns dict with idx/threshold/margin/boxes/padding/version, or all-None
+    if the name doesn't match (still usable)."""
     m = RUN_NAME_RE.match(run_name)
     if not m:
         return {"idx": None, "threshold": None, "margin": None,
-                "boxes": None, "padding": None}
+                "boxes": None, "padding": None, "version": None}
     return {
         "idx": int(m["idx"]),
         "threshold": float(m["threshold"]),
         "margin": float(m["margin"]),
         "boxes": m["boxes"] == "boxes",
         "padding": float(m["padding"]),
+        "version": m["version"] or "v1",
     }
 
 
@@ -124,6 +126,7 @@ def build_row(run_name: str, cat_stats: Dict[str, Dict[str, float]]) -> Dict[str
     params = parse_run_name(run_name)
     row: Dict[str, object] = {
         "Run": run_name,
+        "Version": params.get("version") or "v1",
         "Threshold": params["threshold"],
         "Margin": params["margin"],
         "Boxes": params["boxes"],
@@ -167,7 +170,7 @@ def main():
     df = pd.DataFrame(rows)
 
     # Sort by grid params for readability (Threshold, Margin, Boxes, Padding)
-    df = df.sort_values(by=["Threshold", "Margin", "Boxes", "Padding"]).reset_index(drop=True)
+    df = df.sort_values(by=["Threshold", "Margin", "Boxes", "Padding", "Version"]).reset_index(drop=True)
 
     score_cols = [
         f"{c.capitalize()}_{suffix}"
@@ -185,7 +188,7 @@ def main():
     df["MeanF1_4excl"] = df[calib_cols].mean(axis=1)
     print(f"\nTop 5 rows by mean 4excl F1 (calibration sets):")
     print(df.sort_values("MeanF1_4excl", ascending=False).head(5)[
-        ["Run", "Threshold", "Margin", "Boxes", "Padding"] + score_cols + ["MeanF1_4excl"]
+        ["Run", "Version", "Threshold", "Margin", "Boxes", "Padding"] + score_cols + ["MeanF1_4excl"]
     ].to_string(index=False))
 
 
